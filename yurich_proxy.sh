@@ -1,7 +1,7 @@
 #!/bin/bash
 # Прокси-менеджер с Telegram-ботом (кнопки, админка, статистика)
 # Автор: Юрич
-# Версия: 3.3
+# Версия: 3.4
 
 set -e
 
@@ -18,10 +18,12 @@ info() { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
 error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
 
-# Проверка интернета
+# Проверка интернета (необязательная, не прерывает установку)
 check_internet() {
-    if ! curl -s --head https://google.com | head -n 1 | grep "200 OK" > /dev/null; then
-        error "Нет подключения к интернету. Проверьте сеть."
+    if curl -s --connect-timeout 5 https://ifconfig.me > /dev/null; then
+        info "Интернет доступен"
+    else
+        warn "Не удаётся проверить интернет-соединение, продолжаем установку..."
     fi
 }
 
@@ -38,7 +40,7 @@ print_banner() {
     printf "${YELLOW}║     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║\n"
     printf '║                                                                          ║\n'
     printf "${GREEN}║              ★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║\n"
-    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.3${CYAN}                       ║\n"
+    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.4${CYAN}                       ║\n"
     printf '║                                                                          ║\n'
     printf '╚══════════════════════════════════════════════════════════════════════════╝\n'
     printf "${NC}\n\n"
