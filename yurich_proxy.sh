@@ -1,7 +1,7 @@
 #!/bin/bash
 # Прокси-менеджер с Telegram-ботом (управление каналами, статистика)
 # Автор: Юрич
-# Версия: 3.8
+# Версия: 4.0 (единый файл, исправлен heredoc)
 
 set -e
 
@@ -46,7 +46,7 @@ print_banner() {
     printf "${YELLOW}║     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║\n"
     printf '║                                                                          ║\n'
     printf "${GREEN}║              ★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║\n"
-    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.8${CYAN}                       ║\n"
+    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v4.0${CYAN}                       ║\n"
     printf '║                                                                          ║\n'
     printf '╚══════════════════════════════════════════════════════════════════════════╝\n'
     printf "${NC}\n\n"
@@ -219,7 +219,7 @@ EOF
 
 pip install -r requirements.txt
 
-# Инициализация базы данных (с таблицей channels)
+# Инициализация базы данных
 cat > init_db.py <<EOF
 import sqlite3
 conn = sqlite3.connect('database.db')
@@ -249,7 +249,6 @@ c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mtproto_port', ?
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mtproto_secret', ?)", ($MTPROTO_SECRET,))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mtproto_domain', ?)", ('$DOMAIN',))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('main_channel_id', ?)", (1,))
-# Добавляем основной канал
 c.execute("INSERT OR IGNORE INTO channels (id, channel_id, name, is_active) VALUES (1, ?, 'Основной канал', 1)", ('$CHANNEL_ID',))
 conn.commit()
 conn.close()
@@ -257,7 +256,7 @@ EOF
 
 python3 init_db.py
 
-# Основной скрипт бота (исправленный heredoc)
+# Создаём код бота (исправленный heredoc с уникальным маркером)
 cat > bot.py <<'PYEOF'
 import asyncio
 import logging
@@ -625,7 +624,6 @@ async def add_channel_id(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Проверка существования канала
     try:
         chat = await bot.get_chat(channel_id)
         name = chat.title or chat.username or channel_id
@@ -922,6 +920,7 @@ if [[ -n "$ADMIN_ID" ]]; then
     info "Администратор с ID $ADMIN_ID установлен."
 fi
 
+# Создание консольной команды
 cat > /usr/local/bin/yurich-proxy <<'EOF'
 #!/bin/bash
 case "$1" in
