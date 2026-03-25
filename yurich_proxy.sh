@@ -1,11 +1,10 @@
 #!/bin/bash
-# Прокси-менеджер с Telegram-ботом (кнопки, админка, статистика)
+# Прокси-менеджер для Telegram и WhatsApp с Telegram-ботом
 # Автор: Юрич
-# Версия: 3.4
+# Версия: 3.5
 
 set -e
 
-# Определяем цвета в самом начале
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -13,12 +12,10 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Функции для вывода
 info() { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
 error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
 
-# Проверка интернета (необязательная, не прерывает установку)
 check_internet() {
     if curl -s --connect-timeout 5 https://ifconfig.me > /dev/null; then
         info "Интернет доступен"
@@ -40,7 +37,7 @@ print_banner() {
     printf "${YELLOW}║     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║\n"
     printf '║                                                                          ║\n'
     printf "${GREEN}║              ★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║\n"
-    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.4${CYAN}                       ║\n"
+    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.5${CYAN}                       ║\n"
     printf '║                                                                          ║\n'
     printf '╚══════════════════════════════════════════════════════════════════════════╝\n'
     printf "${NC}\n\n"
@@ -50,12 +47,10 @@ print_banner() {
 print_banner
 check_internet
 
-# Проверка root
 if [[ $EUID -ne 0 ]]; then
     error "Скрипт должен выполняться от root. Используйте sudo."
 fi
 
-# Проверка ОС
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS=$ID
@@ -82,10 +77,12 @@ if [[ "$change_iface" == "n" ]]; then
     read -p "Введите имя интерфейса (например, eth0, ens3): " default_iface
 fi
 
-# Установка Docker
+# Установка Docker (исправлено для Ubuntu 20.04)
 if ! command -v docker &> /dev/null; then
     info "Установка Docker..."
     curl -fsSL https://get.docker.com -o get-docker.sh
+    # Удаляем строку с docker-model-plugin из скрипта, если она там есть
+    sed -i 's/docker-model-plugin//g' get-docker.sh
     sh get-docker.sh
     rm get-docker.sh
     systemctl enable docker
@@ -250,7 +247,7 @@ EOF
 
 python3 init_db.py
 
-# Создаём бота (исправленный код с кнопками, админкой и подписью "Юрич делает")
+# Основной скрипт бота (полная версия с кнопками и админкой)
 cat > bot.py <<'PYEOF'
 import asyncio
 import logging
