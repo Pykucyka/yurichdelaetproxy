@@ -12,7 +12,6 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Красивый заголовок
 print_banner() {
     clear
     echo -e "${CYAN}"
@@ -103,7 +102,6 @@ SOCKS_PORT=${SOCKS_PORT:-1080}
 read -p "Порт MTProto [443]: " MTPROTO_PORT
 MTPROTO_PORT=${MTPROTO_PORT:-443}
 
-# Генерация секрета MTProto
 MTPROTO_SECRET=$(head -c 16 /dev/urandom | xxd -ps)
 info "Сгенерирован секрет MTProto: $MTPROTO_SECRET"
 
@@ -113,7 +111,6 @@ if [[ -z "$ADMIN_ID" ]]; then
     warn "ID администратора не указан. Вы сможете назначить админа позже через бота командой /addadmin."
 fi
 
-# Подтверждение
 echo ""
 echo "-----------------------------"
 echo "Токен бота: $BOT_TOKEN"
@@ -128,8 +125,6 @@ echo "-----------------------------"
 read -p "Продолжить? (y/n): " CONFIRM
 [[ "$CONFIRM" != "y" ]] && error "Установка отменена."
 
-# Открываем порты в фаерволе
-info "Настройка фаервола..."
 ufw allow 22/tcp
 ufw allow $SOCKS_PORT/tcp
 ufw allow $MTPROTO_PORT/tcp
@@ -191,11 +186,9 @@ info "Настройка Telegram бота..."
 mkdir -p /opt/proxy-bot
 cd /opt/proxy-bot
 
-# Создаем виртуальное окружение Python
 python3 -m venv venv
 source venv/bin/activate
 
-# Устанавливаем зависимости
 cat > requirements.txt <<EOF
 aiogram==3.13.1
 python-telegram-bot==21.10
@@ -205,7 +198,6 @@ EOF
 
 pip install -r requirements.txt
 
-# Инициализация базы данных
 cat > init_db.py <<EOF
 import sqlite3
 conn = sqlite3.connect('database.db')
@@ -235,14 +227,370 @@ EOF
 
 python3 init_db.py
 
-# Создаем основной скрипт бота (содержимое такое же, как в предыдущей версии)
-# Для краткости здесь приведена только основная структура, полный код есть в репозитории
+# Основной скрипт бота
 cat > bot.py <<'PYEOF'
-# ... полный код бота (aiogram) ...
+import asyncio
+import logging
+import sqlite3
+import subprocess
+import os
+import secrets
+import string
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ChatMemberStatus
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+
+# Конфигурация из переменных окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+
+# Инициализация
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+logging.basicConfig(level=logging.INFO)
+
+# База данных
+def get_db():
+    conn = sqlite3.connect('/opt/proxy-bot/database.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# Проверка подписки
+async def is_subscribed(user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+    except:
+        return False
+
+# Кнопка для подписки
+def get_subscribe_keyboard():
+    url = CHANNEL_ID if CHANNEL_ID.startswith('@') else f'https://t.me/{CHANNEL_ID}'
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться на канал", url=url)],
+        [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")]
+    ])
+    return keyboard
+
+@dp.message(CommandStart())
+async def start_cmd(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await is_subscribed(user_id):
+        await message.answer(
+            "🔒 Для использования бота необходимо подписаться на наш канал!\n\n"
+            "После подписки нажмите кнопку 'Проверить подписку'.",
+            reply_markup=get_subscribe_keyboard()
+        )
+        return
+
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not user:
+        socks_user = f"user_{user_id}"
+        socks_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+        subprocess.run(['useradd', '-g', 'proxyusers', '-s', '/bin/false', socks_user], check=False)
+        subprocess.run(['echo', f'{socks_user}:{socks_pass}', '|', 'chpasswd'], shell=True, check=False)
+        conn.execute(
+            "INSERT INTO users (tg_id, username, socks_user, socks_pass, is_admin) VALUES (?, ?, ?, ?, ?)",
+            (user_id, message.from_user.username, socks_user, socks_pass, 0)
+        )
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+
+    settings = conn.execute("SELECT key, value FROM settings").fetchall()
+    settings_dict = {row['key']: row['value'] for row in settings}
+    conn.close()
+
+    public_ip = subprocess.getoutput("curl -s ifconfig.me")
+    mtproto_link = f"tg://proxy?server={public_ip}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
+    if settings_dict['mtproto_domain'] != public_ip:
+        mtproto_link_domain = f"tg://proxy?server={settings_dict['mtproto_domain']}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
+        domain_text = f"\n   Ссылка с доменом: {mtproto_link_domain}"
+    else:
+        domain_text = ""
+
+    text = (
+        f"✅ Вы зарегистрированы!\n\n"
+        f"🌐 SOCKS5 прокси:\n"
+        f"   Сервер: {public_ip}\n"
+        f"   Порт: {settings_dict['socks_port']}\n"
+        f"   Логин: {user['socks_user']}\n"
+        f"   Пароль: {user['socks_pass']}\n\n"
+        f"📱 MTProto прокси для Telegram:\n"
+        f"   Сервер: {public_ip}\n"
+        f"   Порт: {settings_dict['mtproto_port']}\n"
+        f"   Секрет: {settings_dict['mtproto_secret']}\n"
+        f"   Ссылка: {mtproto_link}{domain_text}\n\n"
+        f"⚙️ Для использования WhatsApp настройте SOCKS5 прокси в системе или приложении."
+    )
+    await message.answer(text)
+
+@dp.callback_query(F.data == "check_sub")
+async def check_sub_callback(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if await is_subscribed(user_id):
+        await callback.message.delete()
+        await start_cmd(callback.message, None)
+    else:
+        await callback.answer("Вы еще не подписались на канал!", show_alert=True)
+
+@dp.message(Command("stats"))
+async def stats_cmd(message: Message):
+    user_id = message.from_user.id
+    if not await is_subscribed(user_id):
+        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        return
+
+    traffic_summary = subprocess.getoutput("vnstat -i eth0 -s")
+    socks_port = get_db().execute("SELECT value FROM settings WHERE key='socks_port'").fetchone()['value']
+    active_conn = subprocess.getoutput(f"netstat -an | grep :{socks_port} | grep ESTABLISHED | wc -l")
+    text = f"📊 Статистика прокси:\n\n{traffic_summary}\n\nАктивных подключений к SOCKS5: {active_conn}"
+    await message.answer(text)
+
+@dp.message(Command("myproxy"))
+async def myproxy_cmd(message: Message):
+    user_id = message.from_user.id
+    if not await is_subscribed(user_id):
+        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        return
+
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not user:
+        await message.answer("❌ Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    settings = conn.execute("SELECT key, value FROM settings").fetchall()
+    settings_dict = {row['key']: row['value'] for row in settings}
+    conn.close()
+
+    public_ip = subprocess.getoutput("curl -s ifconfig.me")
+    mtproto_link = f"tg://proxy?server={public_ip}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
+    text = (
+        f"🌐 Ваши данные для прокси:\n\n"
+        f"SOCKS5:\n"
+        f"   Сервер: {public_ip}\n"
+        f"   Порт: {settings_dict['socks_port']}\n"
+        f"   Логин: {user['socks_user']}\n"
+        f"   Пароль: {user['socks_pass']}\n\n"
+        f"MTProto:\n"
+        f"   Сервер: {public_ip}\n"
+        f"   Порт: {settings_dict['mtproto_port']}\n"
+        f"   Секрет: {settings_dict['mtproto_secret']}\n"
+        f"   Ссылка: {mtproto_link}"
+    )
+    await message.answer(text)
+
+def is_admin(user_id: int) -> bool:
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return admin and admin['is_admin'] == 1
+
+@dp.message(Command("adduser"))
+async def adduser_cmd(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    args = command.args
+    if not args:
+        await message.answer("Укажите username нового пользователя. Пример: /adduser @username")
+        return
+    username = args.strip().lstrip('@')
+    try:
+        user = await bot.get_chat(f"@{username}")
+    except:
+        await message.answer("Пользователь не найден. Убедитесь, что username правильный.")
+        return
+    tg_id = user.id
+    conn = get_db()
+    existing = conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
+    if existing:
+        await message.answer("Пользователь уже зарегистрирован.")
+        return
+    socks_user = f"user_{tg_id}"
+    socks_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+    subprocess.run(['useradd', '-g', 'proxyusers', '-s', '/bin/false', socks_user], check=False)
+    subprocess.run(['echo', f'{socks_user}:{socks_pass}', '|', 'chpasswd'], shell=True, check=False)
+    conn.execute(
+        "INSERT INTO users (tg_id, username, socks_user, socks_pass, is_admin) VALUES (?, ?, ?, ?, 0)",
+        (tg_id, username, socks_user, socks_pass)
+    )
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Пользователь @{username} добавлен. Он сможет получить свои данные через /start.")
+
+@dp.message(Command("deluser"))
+async def deluser_cmd(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    args = command.args
+    if not args:
+        await message.answer("Укажите username пользователя для удаления. Пример: /deluser @username")
+        return
+    username = args.strip().lstrip('@')
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if not user:
+        await message.answer("Пользователь не найден.")
+        return
+    subprocess.run(['userdel', user['socks_user']], check=False)
+    conn.execute("DELETE FROM users WHERE id = ?", (user['id'],))
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Пользователь @{username} удален.")
+
+@dp.message(Command("listusers"))
+async def listusers_cmd(message: Message):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    conn = get_db()
+    users = conn.execute("SELECT tg_id, username, created_at FROM users").fetchall()
+    conn.close()
+    if not users:
+        await message.answer("Нет зарегистрированных пользователей.")
+        return
+    text = "📋 Список пользователей:\n\n"
+    for u in users:
+        text += f"👤 @{u['username']} (ID: {u['tg_id']}) - зарегистрирован {u['created_at']}\n"
+    await message.answer(text)
+
+@dp.message(Command("settings"))
+async def settings_cmd(message: Message):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    conn = get_db()
+    settings = conn.execute("SELECT key, value FROM settings").fetchall()
+    conn.close()
+    text = "⚙️ Текущие настройки:\n\n"
+    for s in settings:
+        text += f"**{s['key']}**: `{s['value']}`\n"
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("setsocksport"))
+async def set_socks_port(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    args = command.args
+    if not args or not args.isdigit():
+        await message.answer("Укажите новый порт. Пример: /setsocksport 1080")
+        return
+    new_port = int(args)
+    subprocess.run(f"sed -i 's/port = [0-9]\\+/port = {new_port}/' /etc/danted.conf", shell=True)
+    subprocess.run("systemctl restart danted", shell=True)
+    subprocess.run(f"ufw allow {new_port}/tcp", shell=True)
+    conn = get_db()
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'socks_port'", (new_port,))
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Порт SOCKS5 изменен на {new_port}.")
+
+@dp.message(Command("setmtport"))
+async def set_mt_port(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    args = command.args
+    if not args or not args.isdigit():
+        await message.answer("Укажите новый порт. Пример: /setmtport 443")
+        return
+    new_port = int(args)
+    os.chdir('/opt/mtproto-proxy')
+    subprocess.run(f"sed -i 's/\"[0-9]\\+:443\"/\"{new_port}:443\"/' docker-compose.yml", shell=True)
+    subprocess.run("docker-compose down && docker-compose up -d", shell=True)
+    subprocess.run(f"ufw allow {new_port}/tcp", shell=True)
+    conn = get_db()
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'mtproto_port'", (new_port,))
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Порт MTProto изменен на {new_port}.")
+
+@dp.message(Command("setmtsecret"))
+async def set_mt_secret(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    args = command.args
+    if not args or len(args) != 32 or not all(c in '0123456789abcdef' for c in args):
+        await message.answer("Укажите новый секрет (32 hex символа). Пример: /setmtsecret 0123456789abcdef0123456789abcdef")
+        return
+    new_secret = args
+    os.chdir('/opt/mtproto-proxy')
+    subprocess.run(f"sed -i 's/SECRET=.*/SECRET={new_secret}/' docker-compose.yml", shell=True)
+    subprocess.run("docker-compose down && docker-compose up -d", shell=True)
+    conn = get_db()
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'mtproto_secret'", (new_secret,))
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Секрет MTProto изменен.")
+
+@dp.message(Command("addadmin"))
+async def addadmin_cmd(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+    args = command.args
+    if not args:
+        await message.answer("Укажите username нового администратора. Пример: /addadmin @username")
+        return
+    username = args.strip().lstrip('@')
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if not user:
+        await message.answer("Пользователь не найден. Сначала зарегистрируйте его через /start или /adduser.")
+        return
+    conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Пользователь @{username} теперь администратор.")
+
+@dp.message(Command("help"))
+async def help_cmd(message: Message):
+    user_id = message.from_user.id
+    admin = is_admin(user_id)
+    text = (
+        "📚 Доступные команды:\n\n"
+        "/start – регистрация и получение данных прокси\n"
+        "/stats – общая статистика\n"
+        "/myproxy – ваши данные прокси\n"
+        "/help – это сообщение\n"
+    )
+    if admin:
+        text += (
+            "\n👑 Админ-команды:\n"
+            "/adduser @username – добавить пользователя\n"
+            "/deluser @username – удалить пользователя\n"
+            "/listusers – список пользователей\n"
+            "/setsocksport <порт> – изменить порт SOCKS5\n"
+            "/setmtport <порт> – изменить порт MTProto\n"
+            "/setmtsecret <32hex> – изменить секрет MTProto\n"
+            "/addadmin @username – дать права админа\n"
+        )
+    await message.answer(text)
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 PYEOF
 
-# Создаем systemd сервис
-info "Создание systemd сервиса..."
+# Создание systemd сервиса
 cat > /etc/systemd/system/proxy-bot.service <<EOF
 [Unit]
 Description=Proxy Management Bot
@@ -266,16 +614,11 @@ systemctl daemon-reload
 systemctl enable proxy-bot
 systemctl start proxy-bot
 
-# Назначаем администратора, если указан ID
 if [[ -n "$ADMIN_ID" ]]; then
-    sqlite3 /opt/proxy-bot/database.db "UPDATE users SET is_admin = 1 WHERE tg_id = $ADMIN_ID;" || true
-    # Если пользователь ещё не зарегистрирован, он не будет админом – бот создаст запись при его первом /start
-    # Можно создать запись принудительно
     sqlite3 /opt/proxy-bot/database.db "INSERT OR IGNORE INTO users (tg_id, username, is_admin) VALUES ($ADMIN_ID, 'admin', 1);"
     info "Администратор с ID $ADMIN_ID установлен."
 fi
 
-# Итоговая информация
 PUBLIC_IP=$(curl -s ifconfig.me)
 MTLINK="tg://proxy?server=$PUBLIC_IP&port=$MTPROTO_PORT&secret=$MTPROTO_SECRET"
 MTLINK_DOMAIN=""
@@ -288,50 +631,12 @@ echo "========================================="
 echo -e "${GREEN}Установка завершена!${NC}"
 echo "========================================="
 echo ""
-echo "SOCKS5 прокси:"
-echo "  Адрес: $PUBLIC_IP"
-echo "  Порт: $SOCKS_PORT"
-echo "  Логин и пароль выдаются ботом для каждого пользователя."
-echo ""
-echo "MTProto прокси:"
-echo "  Адрес: $PUBLIC_IP"
-echo "  Порт: $MTPROTO_PORT"
-echo "  Секрет: $MTPROTO_SECRET"
-echo "  Ссылка: $MTLINK"
-if [[ -n "$MTLINK_DOMAIN" ]]; then
-    echo "  Ссылка с доменом: $MTLINK_DOMAIN"
-fi
+echo "SOCKS5 прокси: $PUBLIC_IP:$SOCKS_PORT"
+echo "MTProto прокси: $PUBLIC_IP:$MTPROTO_PORT"
+echo "Ссылка MTProto: $MTLINK"
+[[ -n "$MTLINK_DOMAIN" ]] && echo "Ссылка с доменом: $MTLINK_DOMAIN"
 echo ""
 echo "Telegram бот: @${BOT_TOKEN%%:*}"
-[[ -n "$BOT_USERNAME" ]] && echo "Username бота: @$BOT_USERNAME"
 echo "Команды бота: /start, /stats, /myproxy, /help"
-echo "Администратор: ${ADMIN_ID:-не задан (назначьте через /addadmin)}"
-echo ""
-echo "Для проверки подписки на канал $CHANNEL_ID, бот будет требовать подписку."
-echo "Информация сохранена в файл /root/proxy_info.txt"
+echo "Информация сохранена в /root/proxy_info.txt"
 echo "========================================="
-
-# Сохраняем информацию в файл
-cat > /root/proxy_info.txt <<EOF
-Прокси Yurich
-
-SOCKS5:
-  Адрес: $PUBLIC_IP
-  Порт: $SOCKS_PORT
-
-MTProto:
-  Адрес: $PUBLIC_IP
-  Порт: $MTPROTO_PORT
-  Секрет: $MTPROTO_SECRET
-  Ссылка: $MTLINK
-EOF
-
-if [[ -n "$MTLINK_DOMAIN" ]]; then
-    echo "  Ссылка с доменом: $MTLINK_DOMAIN" >> /root/proxy_info.txt
-fi
-
-echo "" >> /root/proxy_info.txt
-echo "Telegram бот: @${BOT_TOKEN%%:*}" >> /root/proxy_info.txt
-[[ -n "$BOT_USERNAME" ]] && echo "Username бота: @$BOT_USERNAME" >> /root/proxy_info.txt
-echo "Канал: $CHANNEL_ID" >> /root/proxy_info.txt
-echo "ID администратора: ${ADMIN_ID:-не задан}" >> /root/proxy_info.txt
