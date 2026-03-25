@@ -1,7 +1,7 @@
 #!/bin/bash
-# Прокси-менеджер для Telegram и WhatsApp с Telegram-ботом
+# Прокси-менеджер с Telegram-ботом (управление каналами, статистика)
 # Автор: Юрич
-# Версия: 3.6 (исправлена обработка IPv4, heredoc, ошибки)
+# Версия: 3.8
 
 set -e
 
@@ -16,7 +16,6 @@ info() { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
 error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
 
-# Получение публичного IPv4 (игнорируем IPv6)
 get_public_ipv4() {
     IP=$(curl -4 -s ifconfig.me || curl -4 -s icanhazip.com || curl -4 -s ipinfo.io/ip)
     if [[ -z "$IP" ]]; then
@@ -47,7 +46,7 @@ print_banner() {
     printf "${YELLOW}║     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║\n"
     printf '║                                                                          ║\n'
     printf "${GREEN}║              ★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║\n"
-    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.6${CYAN}                       ║\n"
+    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.8${CYAN}                       ║\n"
     printf '║                                                                          ║\n'
     printf '╚══════════════════════════════════════════════════════════════════════════╝\n'
     printf "${NC}\n\n"
@@ -78,7 +77,6 @@ info "Установка необходимых пакетов..."
 apt install -y curl wget ufw iptables net-tools git python3 python3-pip python3-venv \
     dante-server vnstat sudo
 
-# Определение сетевого интерфейса
 default_iface=$(ip route | grep default | awk '{print $5}' | head -1)
 [[ -z "$default_iface" ]] && default_iface="eth0"
 info "Обнаружен сетевой интерфейс: $default_iface"
@@ -87,7 +85,6 @@ if [[ "$change_iface" == "n" ]]; then
     read -p "Введите имя интерфейса (например, eth0, ens3): " default_iface
 fi
 
-# Установка Docker (исправлено для Ubuntu 20.04)
 if ! command -v docker &> /dev/null; then
     info "Установка Docker..."
     curl -fsSL https://get.docker.com -o get-docker.sh
@@ -98,14 +95,12 @@ if ! command -v docker &> /dev/null; then
     systemctl start docker
 fi
 
-# Установка Docker Compose
 if ! command -v docker-compose &> /dev/null; then
     info "Установка Docker Compose..."
     curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
 fi
 
-# Запрос данных
 echo ""
 info "Введите параметры настройки (Enter = значение по умолчанию):"
 
@@ -114,10 +109,9 @@ read -p "Токен Telegram бота (от @BotFather): " BOT_TOKEN
 
 read -p "Username бота (например, MyProxyBot, необязательно): " BOT_USERNAME
 
-read -p "ID канала (например, @channel или -100123456): " CHANNEL_ID
+read -p "Основной ID канала для проверки подписки (например, @channel или -100123456): " CHANNEL_ID
 [[ -z "$CHANNEL_ID" ]] && error "ID канала обязателен."
 
-# Получаем IPv4 адрес
 PUBLIC_IPV4=$(get_public_ipv4)
 read -p "Ваш домен или IPv4 адрес (оставьте пустым для использования автоматического IP: $PUBLIC_IPV4): " DOMAIN
 if [[ -z "$DOMAIN" ]]; then
@@ -155,13 +149,11 @@ echo "-----------------------------"
 read -p "Продолжить? (y/n): " CONFIRM
 [[ "$CONFIRM" != "y" ]] && error "Установка отменена."
 
-# Открываем порты в фаерволе
 ufw allow 22/tcp
 ufw allow $SOCKS_PORT/tcp
 ufw allow $MTPROTO_PORT/tcp
 ufw --force enable
 
-# Настройка Dante SOCKS5
 info "Настройка SOCKS5 прокси (Dante)..."
 groupadd proxyusers 2>/dev/null || true
 
@@ -188,7 +180,6 @@ EOF
 systemctl restart danted
 systemctl enable danted
 
-# Настройка MTProto через Docker
 info "Настройка MTProto прокси..."
 mkdir -p /opt/mtproto-proxy
 cd /opt/mtproto-proxy
@@ -212,7 +203,6 @@ EOF
 
 docker-compose up -d
 
-# Подготовка для бота
 info "Настройка Telegram бота..."
 mkdir -p /opt/proxy-bot
 cd /opt/proxy-bot
@@ -229,6 +219,7 @@ EOF
 
 pip install -r requirements.txt
 
+# Инициализация базы данных (с таблицей channels)
 cat > init_db.py <<EOF
 import sqlite3
 conn = sqlite3.connect('database.db')
@@ -247,19 +238,27 @@ c.execute('''CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 )''')
+c.execute('''CREATE TABLE IF NOT EXISTS channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT UNIQUE,
+    name TEXT,
+    is_active INTEGER DEFAULT 1
+)''')
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('socks_port', ?)", ($SOCKS_PORT,))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mtproto_port', ?)", ($MTPROTO_PORT,))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mtproto_secret', ?)", ($MTPROTO_SECRET,))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mtproto_domain', ?)", ('$DOMAIN',))
-c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('channel_id', ?)", ('$CHANNEL_ID',))
+c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('main_channel_id', ?)", (1,))
+# Добавляем основной канал
+c.execute("INSERT OR IGNORE INTO channels (id, channel_id, name, is_active) VALUES (1, ?, 'Основной канал', 1)", ('$CHANNEL_ID',))
 conn.commit()
 conn.close()
 EOF
 
 python3 init_db.py
 
-# Основной скрипт бота (полная версия с кнопками и админкой) — теперь без ошибок heredoc
-cat > bot.py <<'EOF'
+# Основной скрипт бота (исправленный heredoc)
+cat > bot.py <<'PYEOF'
 import asyncio
 import logging
 import sqlite3
@@ -267,7 +266,7 @@ import subprocess
 import os
 import secrets
 import string
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -277,7 +276,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # для обратной совместимости
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -288,20 +287,44 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_active_channels():
+    conn = get_db()
+    rows = conn.execute("SELECT channel_id FROM channels WHERE is_active = 1").fetchall()
+    conn.close()
+    return [row['channel_id'] for row in rows]
+
+def get_main_channel():
+    conn = get_db()
+    main_id = conn.execute("SELECT value FROM settings WHERE key='main_channel_id'").fetchone()
+    if main_id:
+        row = conn.execute("SELECT channel_id FROM channels WHERE id = ?", (main_id['value'],)).fetchone()
+        if row:
+            return row['channel_id']
+    return None
+
 async def is_subscribed(user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
-    except:
-        return False
+    channels = get_active_channels()
+    if not channels:
+        return True
+    for ch in channels:
+        try:
+            member = await bot.get_chat_member(ch, user_id)
+            if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                return False
+        except:
+            return False
+    return True
 
 def get_subscribe_keyboard():
-    url = CHANNEL_ID if CHANNEL_ID.startswith('@') else f'https://t.me/{CHANNEL_ID}'
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Подписаться на канал", url=url)],
-        [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")]
-    ])
-    return keyboard
+    channels = get_active_channels()
+    if not channels:
+        return None
+    buttons = []
+    for ch in channels:
+        url = ch if ch.startswith('@') else f'https://t.me/{ch}'
+        buttons.append([InlineKeyboardButton(text=f"📢 Подписаться на {ch}", url=url)])
+    buttons.append([InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def main_keyboard(is_admin: bool = False):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -319,9 +342,22 @@ def admin_keyboard():
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="list_users")],
         [InlineKeyboardButton(text="➕ Добавить пользователя", callback_data="add_user"),
          InlineKeyboardButton(text="➖ Удалить пользователя", callback_data="del_user")],
+        [InlineKeyboardButton(text="📈 Статистика пользователей", callback_data="user_stats"),
+         InlineKeyboardButton(text="📡 Онлайн статистика", callback_data="online_stats")],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_stats")],
+        [InlineKeyboardButton(text="📢 Каналы", callback_data="channels_menu")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings"),
-         InlineKeyboardButton(text="📈 Онлайн статистика", callback_data="online_stats")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
+         InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
+    ])
+    return keyboard
+
+def channels_menu_keyboard():
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Список каналов", callback_data="list_channels")],
+        [InlineKeyboardButton(text="➕ Добавить канал", callback_data="add_channel")],
+        [InlineKeyboardButton(text="➖ Удалить канал", callback_data="del_channel")],
+        [InlineKeyboardButton(text="⭐ Установить основной", callback_data="set_main_channel")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]
     ])
     return keyboard
 
@@ -331,15 +367,22 @@ class AddUserState(StatesGroup):
 class DelUserState(StatesGroup):
     waiting_for_username = State()
 
+class AddChannelState(StatesGroup):
+    waiting_for_channel_id = State()
+
 @dp.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
-        await message.answer(
-            "🔒 Для использования бота необходимо подписаться на наш канал!\n\n"
-            "После подписки нажмите кнопку 'Проверить подписку'.",
-            reply_markup=get_subscribe_keyboard()
-        )
+        kb = get_subscribe_keyboard()
+        if kb:
+            await message.answer(
+                "🔒 Для использования бота необходимо подписаться на все указанные каналы!\n\n"
+                "После подписки нажмите кнопку 'Проверить подписку'.",
+                reply_markup=kb
+            )
+        else:
+            await message.answer("⚠️ Нет активных каналов для проверки подписки.")
         return
 
     conn = get_db()
@@ -395,7 +438,7 @@ async def check_sub_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.delete()
         await start_cmd(callback.message, state)
     else:
-        await callback.answer("Вы еще не подписались на канал!", show_alert=True)
+        await callback.answer("Вы не подписаны на все каналы!", show_alert=True)
 
 @dp.callback_query(F.data == "my_data")
 async def my_data_callback(callback: CallbackQuery):
@@ -441,7 +484,7 @@ async def add_user_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         "➕ Введите username нового пользователя (без @):",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]])
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_panel")]])
     )
     await state.set_state(AddUserState.waiting_for_username)
 
@@ -490,7 +533,7 @@ async def del_user_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         "➖ Введите username пользователя для удаления (без @):",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]])
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_panel")]])
     )
     await state.set_state(DelUserState.waiting_for_username)
 
@@ -521,20 +564,154 @@ async def del_user_username(message: Message, state: FSMContext):
     await state.clear()
     await start_cmd(message, state)
 
-@dp.callback_query(F.data == "settings")
-async def settings_callback(callback: CallbackQuery):
+@dp.callback_query(F.data == "user_stats")
+async def user_stats_callback(callback: CallbackQuery):
     await callback.answer()
-    await settings_cmd(callback.message)
+    await user_stats_cmd(callback.message)
 
 @dp.callback_query(F.data == "online_stats")
 async def online_stats_callback(callback: CallbackQuery):
     await callback.answer()
     await online_stats_cmd(callback.message)
 
+@dp.callback_query(F.data == "refresh_stats")
+async def refresh_stats_callback(callback: CallbackQuery):
+    await callback.answer("Обновление...")
+    await user_stats_cmd(callback.message)
+
+@dp.callback_query(F.data == "channels_menu")
+async def channels_menu_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "📢 Управление каналами для обязательной подписки:\n\n"
+        "Выберите действие:",
+        reply_markup=channels_menu_keyboard()
+    )
+
+@dp.callback_query(F.data == "list_channels")
+async def list_channels_callback(callback: CallbackQuery):
+    await callback.answer()
+    conn = get_db()
+    rows = conn.execute("SELECT id, channel_id, name, is_active FROM channels").fetchall()
+    main_id = conn.execute("SELECT value FROM settings WHERE key='main_channel_id'").fetchone()
+    conn.close()
+    if not rows:
+        await callback.message.edit_text("📭 Список каналов пуст.", reply_markup=channels_menu_keyboard())
+        return
+    text = "📋 Список каналов:\n\n"
+    for ch in rows:
+        main_mark = "⭐ " if main_id and ch['id'] == int(main_id['value']) else ""
+        text += f"{main_mark}ID {ch['id']}: {ch['channel_id']} ({ch['name']})\n"
+    await callback.message.edit_text(text, reply_markup=channels_menu_keyboard())
+
+@dp.callback_query(F.data == "add_channel")
+async def add_channel_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "➕ Введите ID канала (например, @channel или -100123456):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="channels_menu")]])
+    )
+    await state.set_state(AddChannelState.waiting_for_channel_id)
+
+@dp.message(AddChannelState.waiting_for_channel_id)
+async def add_channel_id(message: Message, state: FSMContext):
+    channel_id = message.text.strip()
+    user_id = message.from_user.id
+
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not admin or admin['is_admin'] != 1:
+        await message.answer("⛔ У вас нет прав администратора.")
+        await state.clear()
+        return
+
+    # Проверка существования канала
+    try:
+        chat = await bot.get_chat(channel_id)
+        name = chat.title or chat.username or channel_id
+    except:
+        await message.answer("❌ Не удалось получить информацию о канале. Проверьте ID и права бота.")
+        await state.clear()
+        return
+
+    try:
+        conn.execute("INSERT INTO channels (channel_id, name, is_active) VALUES (?, ?, 1)", (channel_id, name))
+        conn.commit()
+        await message.answer(f"✅ Канал {channel_id} добавлен.")
+    except sqlite3.IntegrityError:
+        await message.answer("❌ Такой канал уже существует.")
+    conn.close()
+    await state.clear()
+    await start_cmd(message, state)
+
+@dp.callback_query(F.data == "del_channel")
+async def del_channel_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    conn = get_db()
+    channels = conn.execute("SELECT id, channel_id, name FROM channels").fetchall()
+    conn.close()
+    if not channels:
+        await callback.message.edit_text("Нет каналов для удаления.", reply_markup=channels_menu_keyboard())
+        return
+    buttons = []
+    for ch in channels:
+        buttons.append([InlineKeyboardButton(text=f"❌ {ch['channel_id']}", callback_data=f"delch_{ch['id']}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="channels_menu")])
+    await callback.message.edit_text("Выберите канал для удаления:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("delch_"))
+async def confirm_del_channel(callback: CallbackQuery, state: FSMContext):
+    channel_id = int(callback.data.split("_")[1])
+    conn = get_db()
+    main_id = conn.execute("SELECT value FROM settings WHERE key='main_channel_id'").fetchone()
+    if main_id and int(main_id['value']) == channel_id:
+        await callback.answer("Нельзя удалить основной канал!", show_alert=True)
+        conn.close()
+        return
+    conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+    conn.commit()
+    conn.close()
+    await callback.answer("Канал удалён")
+    await callback.message.edit_text("✅ Канал удалён.", reply_markup=channels_menu_keyboard())
+
+@dp.callback_query(F.data == "set_main_channel")
+async def set_main_channel_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    conn = get_db()
+    channels = conn.execute("SELECT id, channel_id, name FROM channels").fetchall()
+    conn.close()
+    if not channels:
+        await callback.message.edit_text("Нет каналов для выбора.", reply_markup=channels_menu_keyboard())
+        return
+    buttons = []
+    for ch in channels:
+        buttons.append([InlineKeyboardButton(text=f"⭐ {ch['channel_id']}", callback_data=f"mainch_{ch['id']}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="channels_menu")])
+    await callback.message.edit_text("Выберите основной канал:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("mainch_"))
+async def confirm_main_channel(callback: CallbackQuery):
+    channel_id = int(callback.data.split("_")[1])
+    conn = get_db()
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'main_channel_id'", (channel_id,))
+    conn.commit()
+    conn.close()
+    await callback.answer("Основной канал установлен")
+    await callback.message.edit_text("✅ Основной канал обновлён.", reply_markup=channels_menu_keyboard())
+
+@dp.callback_query(F.data == "settings")
+async def settings_callback(callback: CallbackQuery):
+    await callback.answer()
+    await settings_cmd(callback.message)
+
 async def myproxy_cmd(message: Message):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
-        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        kb = get_subscribe_keyboard()
+        if kb:
+            await message.answer("🔒 Сначала подпишитесь на все каналы.", reply_markup=kb)
+        else:
+            await message.answer("⚠️ Нет активных каналов для проверки подписки.")
         return
 
     conn = get_db()
@@ -570,7 +747,11 @@ async def myproxy_cmd(message: Message):
 async def stats_cmd(message: Message):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
-        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        kb = get_subscribe_keyboard()
+        if kb:
+            await message.answer("🔒 Сначала подпишитесь на все каналы.", reply_markup=kb)
+        else:
+            await message.answer("⚠️ Нет активных каналов для проверки подписки.")
         return
 
     traffic_summary = subprocess.getoutput("vnstat -i eth0 -s")
@@ -587,7 +768,11 @@ async def stats_cmd(message: Message):
 async def share_cmd(message: Message):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
-        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        kb = get_subscribe_keyboard()
+        if kb:
+            await message.answer("🔒 Сначала подпишитесь на все каналы.", reply_markup=kb)
+        else:
+            await message.answer("⚠️ Нет активных каналов для проверки подписки.")
         return
 
     conn = get_db()
@@ -632,12 +817,10 @@ async def settings_cmd(message: Message):
     user_id = message.from_user.id
     conn = get_db()
     admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
-    conn.close()
     if not admin or admin['is_admin'] != 1:
         await message.answer("⛔ У вас нет прав администратора.")
         return
 
-    conn = get_db()
     settings = conn.execute("SELECT key, value FROM settings").fetchall()
     conn.close()
     text = "⚙️ Текущие настройки:\n\n"
@@ -665,6 +848,30 @@ async def listusers_cmd(message: Message):
     text += "\n_ _ _ _ _ _ _ _ _ _\n*Юрич делает*"
     await message.answer(text, parse_mode="Markdown")
 
+async def user_stats_cmd(message: Message):
+    user_id = message.from_user.id
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not admin or admin['is_admin'] != 1:
+        await message.answer("⛔ У вас нет прав администратора.")
+        return
+
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    total = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()['cnt']
+    today_cnt = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE DATE(created_at) = ?", (today,)).fetchone()['cnt']
+    yesterday_cnt = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE DATE(created_at) = ?", (yesterday,)).fetchone()['cnt']
+    conn.close()
+    text = (
+        f"📊 *Статистика пользователей*\n\n"
+        f"👥 Всего пользователей: {total}\n"
+        f"📅 Зарегистрировалось сегодня: {today_cnt}\n"
+        f"📆 Зарегистрировалось вчера: {yesterday_cnt}\n\n"
+        f"_ _ _ _ _ _ _ _ _ _\n"
+        f"*Юрич делает*"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
 async def online_stats_cmd(message: Message):
     user_id = message.from_user.id
     conn = get_db()
@@ -684,7 +891,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-EOF
+PYEOF
 
 # Создание systemd сервиса
 cat > /etc/systemd/system/proxy-bot.service <<EOF
@@ -710,13 +917,11 @@ systemctl daemon-reload
 systemctl enable proxy-bot
 systemctl start proxy-bot
 
-# Установка администратора
 if [[ -n "$ADMIN_ID" ]]; then
     sqlite3 /opt/proxy-bot/database.db "INSERT OR IGNORE INTO users (tg_id, username, is_admin) VALUES ($ADMIN_ID, 'admin', 1);"
     info "Администратор с ID $ADMIN_ID установлен."
 fi
 
-# Создание консольной команды для управления
 cat > /usr/local/bin/yurich-proxy <<'EOF'
 #!/bin/bash
 case "$1" in
@@ -758,7 +963,6 @@ EOF
 
 chmod +x /usr/local/bin/yurich-proxy
 
-# Итоговая информация
 PUBLIC_IP=$(get_public_ipv4)
 MTLINK="tg://proxy?server=$PUBLIC_IP&port=$MTPROTO_PORT&secret=$MTPROTO_SECRET"
 MTLINK_DOMAIN=""
@@ -779,14 +983,13 @@ echo ""
 echo "🤖 Telegram бот: @${BOT_TOKEN%%:*}"
 echo "📋 Бот использует кнопки:"
 echo "   • Главное меню: Мои данные, Статистика, Поделиться, Помощь"
-echo "   • Для администраторов: Админка → управление пользователями, настройки, онлайн-статистика"
+echo "   • Админка: управление пользователями, статистика, управление каналами, настройки"
 echo "👑 Администратор: ${ADMIN_ID:-не задан (назначьте через /addadmin)}"
 echo ""
 echo "📄 Информация сохранена в /root/proxy_info.txt"
 echo "🛠 Команды управления: yurich-proxy {status|restart|logs|update|help}"
 echo "========================================="
 
-# Сохраняем информацию
 cat > /root/proxy_info.txt <<EOF
 Прокси-сервер (Docker)
 
