@@ -1,0 +1,2 @@
+# yurichdelaetproxy
+proxy MTPROTO
