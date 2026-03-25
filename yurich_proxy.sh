@@ -1,7 +1,7 @@
 #!/bin/bash
-# Прокси-менеджер для Telegram и WhatsApp с Telegram-ботом
+# Прокси-менеджер с поддержкой Docker (SOCKS5 + MTProto)
 # Автор: Юрич
-# Версия: 3.1
+# Версия: 3.2
 
 set -e
 
@@ -12,28 +12,36 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Функция для проверки подключения к интернету
+check_internet() {
+    if ! curl -s --head https://google.com | head -n 1 | grep "200 OK" > /dev/null; then
+        error "Нет подключения к интернету. Проверьте сеть."
+    fi
+}
+
 print_banner() {
     clear
     echo -e "${CYAN}"
-    echo '╔══════════════════════════════════════════════════════════════╗'
-    echo '║                                                              ║'
-    echo '║              ██╗   ██╗██████╗ ██╗██████╗ ██╗ ██████╗██╗     ║'
-    echo '║              ██║   ██║██╔══██╗██║██╔══██╗██║██╔════╝██║     ║'
-    echo '║              ██║   ██║██████╔╝██║██████╔╝██║██║     ██║     ║'
-    echo '║              ██║   ██║██╔══██╗██║██╔══██╗██║██║     ██║     ║'
-    echo '║              ╚██████╔╝██║  ██║██║██║  ██║██║╚██████╗██║     ║'
-    echo '║               ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝╚═╝     ║'
-    echo '║                                                              ║'
-    echo -e "║                   ${GREEN}ЮРИЧ ДЕЛАЕТ  v3.1${CYAN}                          ║"
-    echo -e "║          ${YELLOW}Прокси-менеджер для Telegram и WhatsApp${CYAN}            ║"
-    echo '║                                                              ║'
-    echo '╚══════════════════════════════════════════════════════════════╝'
+    echo '╔══════════════════════════════════════════════════════════════════════════╗'
+    echo '║                                                                          ║'
+    echo -e '║     ${YELLOW}██████╗ ██████╗  ██████╗ ██╗  ██╗██╗   ██╗${CYAN}                     ║'
+    echo -e '║     ${YELLOW}██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝╚██╗ ██╔╝${CYAN}                     ║'
+    echo -e '║     ${YELLOW}██████╔╝██████╔╝██║   ██║ ╚███╔╝  ╚████╔╝ ${CYAN}                     ║'
+    echo -e '║     ${YELLOW}██╔═══╝ ██╔══██╗██║   ██║ ██╔██╗   ╚██╔╝  ${CYAN}                     ║'
+    echo -e '║     ${YELLOW}██║     ██║  ██║╚██████╔╝██╔╝ ██╗   ██║   ${CYAN}                     ║'
+    echo -e '║     ${YELLOW}╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║'
+    echo '║                                                                          ║'
+    echo -e "║              ${GREEN}★  PROXY DOCKER  ★  SOCKS5 + MTProto  ★${CYAN}               ║"
+    echo -e "║              ${YELLOW}Для Telegram и WhatsApp  |  v3.2${CYAN}                       ║"
+    echo '║                                                                          ║'
+    echo '╚══════════════════════════════════════════════════════════════════════════╝'
     echo -e "${NC}"
     echo ""
     sleep 1
 }
 
 print_banner
+check_internet
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -60,6 +68,17 @@ apt update && apt upgrade -y
 info "Установка необходимых пакетов..."
 apt install -y curl wget ufw iptables net-tools git python3 python3-pip python3-venv \
     dante-server vnstat sudo
+
+# Определение сетевого интерфейса для vnstat и Dante
+default_iface=$(ip route | grep default | awk '{print $5}' | head -1)
+if [[ -z "$default_iface" ]]; then
+    default_iface="eth0"
+fi
+info "Обнаружен сетевой интерфейс: $default_iface"
+read -p "Использовать этот интерфейс для прокси? (y/n, по умолчанию y): " change_iface
+if [[ "$change_iface" == "n" ]]; then
+    read -p "Введите имя интерфейса (например, eth0, ens3): " default_iface
+fi
 
 # Установка Docker
 if ! command -v docker &> /dev/null; then
@@ -117,6 +136,7 @@ echo "Токен бота: $BOT_TOKEN"
 [[ -n "$BOT_USERNAME" ]] && echo "Username бота: @$BOT_USERNAME"
 echo "Канал: $CHANNEL_ID"
 echo "Домен: $DOMAIN"
+echo "Интерфейс: $default_iface"
 echo "SOCKS5 порт: $SOCKS_PORT"
 echo "MTProto порт: $MTPROTO_PORT"
 echo "MTProto секрет: $MTPROTO_SECRET"
@@ -130,14 +150,14 @@ ufw allow $SOCKS_PORT/tcp
 ufw allow $MTPROTO_PORT/tcp
 ufw --force enable
 
-# Настройка Dante SOCKS5
+# Настройка Dante SOCKS5 с указанием интерфейса
 info "Настройка SOCKS5 прокси (Dante)..."
 groupadd proxyusers 2>/dev/null || true
 
 cat > /etc/danted.conf <<EOF
 logoutput: syslog
 internal: 0.0.0.0 port = $SOCKS_PORT
-external: eth0
+external: $default_iface
 method: username
 clientmethod: none
 user.privileged: root
@@ -227,7 +247,7 @@ EOF
 
 python3 init_db.py
 
-# Основной скрипт бота
+# Создаём бота (тот же код, что и раньше)
 cat > bot.py <<'PYEOF'
 import asyncio
 import logging
@@ -248,18 +268,15 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# Инициализация
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 logging.basicConfig(level=logging.INFO)
 
-# База данных
 def get_db():
     conn = sqlite3.connect('/opt/proxy-bot/database.db')
     conn.row_factory = sqlite3.Row
     return conn
 
-# Проверка подписки
 async def is_subscribed(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
@@ -267,7 +284,6 @@ async def is_subscribed(user_id: int) -> bool:
     except:
         return False
 
-# Кнопка для подписки
 def get_subscribe_keyboard():
     url = CHANNEL_ID if CHANNEL_ID.startswith('@') else f'https://t.me/{CHANNEL_ID}'
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -277,7 +293,7 @@ def get_subscribe_keyboard():
     return keyboard
 
 @dp.message(CommandStart())
-async def start_cmd(message: Message, state: FSMContext):
+async def start_cmd(message: Message):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
         await message.answer(
@@ -334,7 +350,7 @@ async def check_sub_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if await is_subscribed(user_id):
         await callback.message.delete()
-        await start_cmd(callback.message, None)
+        await start_cmd(callback.message)
     else:
         await callback.answer("Вы еще не подписались на канал!", show_alert=True)
 
@@ -628,15 +644,40 @@ fi
 
 echo ""
 echo "========================================="
-echo -e "${GREEN}Установка завершена!${NC}"
+echo -e "${GREEN}✅ Установка завершена!${NC}"
 echo "========================================="
 echo ""
-echo "SOCKS5 прокси: $PUBLIC_IP:$SOCKS_PORT"
-echo "MTProto прокси: $PUBLIC_IP:$MTPROTO_PORT"
-echo "Ссылка MTProto: $MTLINK"
-[[ -n "$MTLINK_DOMAIN" ]] && echo "Ссылка с доменом: $MTLINK_DOMAIN"
+echo "🌐 SOCKS5 прокси: $PUBLIC_IP:$SOCKS_PORT"
+echo "📱 MTProto прокси: $PUBLIC_IP:$MTPROTO_PORT"
+echo "🔗 Ссылка MTProto: $MTLINK"
+[[ -n "$MTLINK_DOMAIN" ]] && echo "🔗 Ссылка с доменом: $MTLINK_DOMAIN"
 echo ""
-echo "Telegram бот: @${BOT_TOKEN%%:*}"
-echo "Команды бота: /start, /stats, /myproxy, /help"
-echo "Информация сохранена в /root/proxy_info.txt"
+echo "🤖 Telegram бот: @${BOT_TOKEN%%:*}"
+echo "📋 Команды бота: /start, /stats, /myproxy, /help"
+echo "👑 Администратор: ${ADMIN_ID:-не задан}"
+echo ""
+echo "📄 Информация сохранена в /root/proxy_info.txt"
 echo "========================================="
+
+cat > /root/proxy_info.txt <<EOF
+Прокси-сервер (Docker)
+
+SOCKS5:
+  Адрес: $PUBLIC_IP
+  Порт: $SOCKS_PORT
+  Логин и пароль выдаются ботом.
+
+MTProto:
+  Адрес: $PUBLIC_IP
+  Порт: $MTPROTO_PORT
+  Секрет: $MTPROTO_SECRET
+  Ссылка: $MTLINK
+EOF
+
+if [[ -n "$MTLINK_DOMAIN" ]]; then
+    echo "  Ссылка с доменом: $MTLINK_DOMAIN" >> /root/proxy_info.txt
+fi
+
+echo "" >> /root/proxy_info.txt
+echo "Telegram бот: @${BOT_TOKEN%%:*}" >> /root/proxy_info.txt
+echo "Канал: $CHANNEL_ID" >> /root/proxy_info.txt
