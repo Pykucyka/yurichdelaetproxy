@@ -1,10 +1,11 @@
 #!/bin/bash
-# Прокси-менеджер с поддержкой Docker (SOCKS5 + MTProto)
+# Прокси-менеджер с Telegram-ботом (кнопки, админка, статистика)
 # Автор: Юрич
-# Версия: 3.2
+# Версия: 3.3
 
 set -e
 
+# Определяем цвета в самом начале
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -12,7 +13,12 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Функция для проверки подключения к интернету
+# Функции для вывода
+info() { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
+error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
+
+# Проверка интернета
 check_internet() {
     if ! curl -s --head https://google.com | head -n 1 | grep "200 OK" > /dev/null; then
         error "Нет подключения к интернету. Проверьте сеть."
@@ -21,32 +27,28 @@ check_internet() {
 
 print_banner() {
     clear
-    echo -e "${CYAN}"
-    echo '╔══════════════════════════════════════════════════════════════════════════╗'
-    echo '║                                                                          ║'
-    echo -e '║     ${YELLOW}██████╗ ██████╗  ██████╗ ██╗  ██╗██╗   ██╗${CYAN}                     ║'
-    echo -e '║     ${YELLOW}██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝╚██╗ ██╔╝${CYAN}                     ║'
-    echo -e '║     ${YELLOW}██████╔╝██████╔╝██║   ██║ ╚███╔╝  ╚████╔╝ ${CYAN}                     ║'
-    echo -e '║     ${YELLOW}██╔═══╝ ██╔══██╗██║   ██║ ██╔██╗   ╚██╔╝  ${CYAN}                     ║'
-    echo -e '║     ${YELLOW}██║     ██║  ██║╚██████╔╝██╔╝ ██╗   ██║   ${CYAN}                     ║'
-    echo -e '║     ${YELLOW}╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║'
-    echo '║                                                                          ║'
-    echo -e "║              ${GREEN}★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║"
-    echo -e "║              ${YELLOW}Для Telegram и WhatsApp  |  v3.2${CYAN}                       ║"
-    echo '║                                                                          ║'
-    echo '╚══════════════════════════════════════════════════════════════════════════╝'
-    echo -e "${NC}"
-    echo ""
+    printf "${CYAN}"
+    printf '╔══════════════════════════════════════════════════════════════════════════╗\n'
+    printf '║                                                                          ║\n'
+    printf "${YELLOW}║     ██████╗ ██████╗  ██████╗ ██╗  ██╗██╗   ██╗${CYAN}                     ║\n"
+    printf "${YELLOW}║     ██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝╚██╗ ██╔╝${CYAN}                     ║\n"
+    printf "${YELLOW}║     ██████╔╝██████╔╝██║   ██║ ╚███╔╝  ╚████╔╝ ${CYAN}                     ║\n"
+    printf "${YELLOW}║     ██╔═══╝ ██╔══██╗██║   ██║ ██╔██╗   ╚██╔╝  ${CYAN}                     ║\n"
+    printf "${YELLOW}║     ██║     ██║  ██║╚██████╔╝██╔╝ ██╗   ██║   ${CYAN}                     ║\n"
+    printf "${YELLOW}║     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║\n"
+    printf '║                                                                          ║\n'
+    printf "${GREEN}║              ★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║\n"
+    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.3${CYAN}                       ║\n"
+    printf '║                                                                          ║\n'
+    printf '╚══════════════════════════════════════════════════════════════════════════╝\n'
+    printf "${NC}\n\n"
     sleep 1
 }
 
 print_banner
 check_internet
 
-info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
-
+# Проверка root
 if [[ $EUID -ne 0 ]]; then
     error "Скрипт должен выполняться от root. Используйте sudo."
 fi
@@ -69,11 +71,9 @@ info "Установка необходимых пакетов..."
 apt install -y curl wget ufw iptables net-tools git python3 python3-pip python3-venv \
     dante-server vnstat sudo
 
-# Определение сетевого интерфейса для vnstat и Dante
+# Определение сетевого интерфейса
 default_iface=$(ip route | grep default | awk '{print $5}' | head -1)
-if [[ -z "$default_iface" ]]; then
-    default_iface="eth0"
-fi
+[[ -z "$default_iface" ]] && default_iface="eth0"
 info "Обнаружен сетевой интерфейс: $default_iface"
 read -p "Использовать этот интерфейс для прокси? (y/n, по умолчанию y): " change_iface
 if [[ "$change_iface" == "n" ]]; then
@@ -145,12 +145,13 @@ echo "-----------------------------"
 read -p "Продолжить? (y/n): " CONFIRM
 [[ "$CONFIRM" != "y" ]] && error "Установка отменена."
 
+# Открываем порты в фаерволе
 ufw allow 22/tcp
 ufw allow $SOCKS_PORT/tcp
 ufw allow $MTPROTO_PORT/tcp
 ufw --force enable
 
-# Настройка Dante SOCKS5 с указанием интерфейса
+# Настройка Dante SOCKS5
 info "Настройка SOCKS5 прокси (Dante)..."
 groupadd proxyusers 2>/dev/null || true
 
@@ -247,7 +248,7 @@ EOF
 
 python3 init_db.py
 
-# Создаём бота (тот же код, что и раньше)
+# Создаём бота (исправленный код с кнопками, админкой и подписью "Юрич делает")
 cat > bot.py <<'PYEOF'
 import asyncio
 import logging
@@ -259,12 +260,12 @@ import string
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ChatMemberStatus
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# Конфигурация из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
@@ -292,8 +293,36 @@ def get_subscribe_keyboard():
     ])
     return keyboard
 
+def main_keyboard(is_admin: bool = False):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Мои данные", callback_data="my_data"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
+        [InlineKeyboardButton(text="📤 Поделиться", callback_data="share"),
+         InlineKeyboardButton(text="❓ Помощь", callback_data="help")]
+    ])
+    if is_admin:
+        keyboard.inline_keyboard.append([InlineKeyboardButton(text="👑 Админка", callback_data="admin_panel")])
+    return keyboard
+
+def admin_keyboard():
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Список пользователей", callback_data="list_users")],
+        [InlineKeyboardButton(text="➕ Добавить пользователя", callback_data="add_user"),
+         InlineKeyboardButton(text="➖ Удалить пользователя", callback_data="del_user")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings"),
+         InlineKeyboardButton(text="📈 Онлайн статистика", callback_data="online_stats")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
+    ])
+    return keyboard
+
+class AddUserState(StatesGroup):
+    waiting_for_username = State()
+
+class DelUserState(StatesGroup):
+    waiting_for_username = State()
+
 @dp.message(CommandStart())
-async def start_cmd(message: Message):
+async def start_cmd(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
         await message.answer(
@@ -341,33 +370,155 @@ async def start_cmd(message: Message):
         f"   Порт: {settings_dict['mtproto_port']}\n"
         f"   Секрет: {settings_dict['mtproto_secret']}\n"
         f"   Ссылка: {mtproto_link}{domain_text}\n\n"
-        f"⚙️ Для использования WhatsApp настройте SOCKS5 прокси в системе или приложении."
+        f"⚙️ Для использования WhatsApp настройте SOCKS5 прокси в системе или приложении.\n\n"
+        f"_ _ _ _ _ _ _ _ _ _\n"
+        f"*Юрич делает*"
     )
-    await message.answer(text)
+    await message.answer(text, parse_mode="Markdown", reply_markup=main_keyboard(user['is_admin'] == 1))
 
 @dp.callback_query(F.data == "check_sub")
-async def check_sub_callback(callback: types.CallbackQuery):
+async def check_sub_callback(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     if await is_subscribed(user_id):
         await callback.message.delete()
-        await start_cmd(callback.message)
+        await start_cmd(callback.message, state)
     else:
         await callback.answer("Вы еще не подписались на канал!", show_alert=True)
 
-@dp.message(Command("stats"))
-async def stats_cmd(message: Message):
+@dp.callback_query(F.data == "my_data")
+async def my_data_callback(callback: CallbackQuery):
+    await callback.answer()
+    await myproxy_cmd(callback.message)
+
+@dp.callback_query(F.data == "stats")
+async def stats_callback(callback: CallbackQuery):
+    await callback.answer()
+    await stats_cmd(callback.message)
+
+@dp.callback_query(F.data == "share")
+async def share_callback(callback: CallbackQuery):
+    await callback.answer()
+    await share_cmd(callback.message)
+
+@dp.callback_query(F.data == "help")
+async def help_callback(callback: CallbackQuery):
+    await callback.answer()
+    await help_cmd(callback.message)
+
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "👑 Админ-панель\nВыберите действие:",
+        reply_markup=admin_keyboard()
+    )
+
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    await start_cmd(callback.message, state)
+
+@dp.callback_query(F.data == "list_users")
+async def list_users_callback(callback: CallbackQuery):
+    await callback.answer()
+    await listusers_cmd(callback.message)
+
+@dp.callback_query(F.data == "add_user")
+async def add_user_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "➕ Введите username нового пользователя (без @):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]])
+    )
+    await state.set_state(AddUserState.waiting_for_username)
+
+@dp.message(AddUserState.waiting_for_username)
+async def add_user_username(message: Message, state: FSMContext):
+    username = message.text.strip().lstrip('@')
     user_id = message.from_user.id
-    if not await is_subscribed(user_id):
-        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not admin or admin['is_admin'] != 1:
+        await message.answer("⛔ У вас нет прав администратора.")
+        await state.clear()
         return
 
-    traffic_summary = subprocess.getoutput("vnstat -i eth0 -s")
-    socks_port = get_db().execute("SELECT value FROM settings WHERE key='socks_port'").fetchone()['value']
-    active_conn = subprocess.getoutput(f"netstat -an | grep :{socks_port} | grep ESTABLISHED | wc -l")
-    text = f"📊 Статистика прокси:\n\n{traffic_summary}\n\nАктивных подключений к SOCKS5: {active_conn}"
-    await message.answer(text)
+    try:
+        user = await bot.get_chat(f"@{username}")
+    except:
+        await message.answer("❌ Пользователь не найден. Проверьте username.")
+        await state.clear()
+        return
+    tg_id = user.id
+    existing = conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
+    if existing:
+        await message.answer("❌ Пользователь уже зарегистрирован.")
+        await state.clear()
+        return
 
-@dp.message(Command("myproxy"))
+    socks_user = f"user_{tg_id}"
+    socks_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+    subprocess.run(['useradd', '-g', 'proxyusers', '-s', '/bin/false', socks_user], check=False)
+    subprocess.run(['echo', f'{socks_user}:{socks_pass}', '|', 'chpasswd'], shell=True, check=False)
+    conn.execute(
+        "INSERT INTO users (tg_id, username, socks_user, socks_pass, is_admin) VALUES (?, ?, ?, ?, 0)",
+        (tg_id, username, socks_user, socks_pass)
+    )
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"✅ Пользователь @{username} добавлен. Он сможет получить свои данные через /start.")
+    await state.clear()
+    await start_cmd(message, state)
+
+@dp.callback_query(F.data == "del_user")
+async def del_user_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "➖ Введите username пользователя для удаления (без @):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]])
+    )
+    await state.set_state(DelUserState.waiting_for_username)
+
+@dp.message(DelUserState.waiting_for_username)
+async def del_user_username(message: Message, state: FSMContext):
+    username = message.text.strip().lstrip('@')
+    user_id = message.from_user.id
+
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not admin or admin['is_admin'] != 1:
+        await message.answer("⛔ У вас нет прав администратора.")
+        await state.clear()
+        return
+
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if not user:
+        await message.answer("❌ Пользователь не найден.")
+        await state.clear()
+        return
+
+    subprocess.run(['userdel', user['socks_user']], check=False)
+    conn.execute("DELETE FROM users WHERE id = ?", (user['id'],))
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"✅ Пользователь @{username} удален.")
+    await state.clear()
+    await start_cmd(message, state)
+
+@dp.callback_query(F.data == "settings")
+async def settings_callback(callback: CallbackQuery):
+    await callback.answer()
+    await settings_cmd(callback.message)
+
+@dp.callback_query(F.data == "online_stats")
+async def online_stats_callback(callback: CallbackQuery):
+    await callback.answer()
+    await online_stats_cmd(callback.message)
+
 async def myproxy_cmd(message: Message):
     user_id = message.from_user.id
     if not await is_subscribed(user_id):
@@ -396,79 +547,97 @@ async def myproxy_cmd(message: Message):
         f"   Сервер: {public_ip}\n"
         f"   Порт: {settings_dict['mtproto_port']}\n"
         f"   Секрет: {settings_dict['mtproto_secret']}\n"
-        f"   Ссылка: {mtproto_link}"
+        f"   Ссылка: {mtproto_link}\n\n"
+        f"_ _ _ _ _ _ _ _ _ _\n"
+        f"*Юрич делает*"
     )
-    await message.answer(text)
+    await message.answer(text, parse_mode="Markdown")
 
-def is_admin(user_id: int) -> bool:
+async def stats_cmd(message: Message):
+    user_id = message.from_user.id
+    if not await is_subscribed(user_id):
+        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        return
+
+    traffic_summary = subprocess.getoutput("vnstat -i eth0 -s")
+    socks_port = get_db().execute("SELECT value FROM settings WHERE key='socks_port'").fetchone()['value']
+    active_conn = subprocess.getoutput(f"netstat -an | grep :{socks_port} | grep ESTABLISHED | wc -l")
+    text = (
+        f"📊 Статистика прокси:\n\n{traffic_summary}\n\n"
+        f"Активных подключений к SOCKS5: {active_conn}\n\n"
+        f"_ _ _ _ _ _ _ _ _ _\n"
+        f"*Юрич делает*"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+async def share_cmd(message: Message):
+    user_id = message.from_user.id
+    if not await is_subscribed(user_id):
+        await message.answer("🔒 Сначала подпишитесь на канал.", reply_markup=get_subscribe_keyboard())
+        return
+
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not user:
+        await message.answer("❌ Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    settings = conn.execute("SELECT key, value FROM settings").fetchall()
+    settings_dict = {row['key']: row['value'] for row in settings}
+    conn.close()
+
+    public_ip = subprocess.getoutput("curl -s ifconfig.me")
+    mtproto_link = f"tg://proxy?server={public_ip}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
+    text = (
+        f"🚀 *Мой прокси для Telegram и WhatsApp*\n\n"
+        f"🌐 SOCKS5: `{public_ip}:{settings_dict['socks_port']}`\n"
+        f"   Логин: `{user['socks_user']}`\n"
+        f"   Пароль: `{user['socks_pass']}`\n\n"
+        f"📱 MTProto: `{mtproto_link}`\n\n"
+        f"🤖 Бот: @{os.getenv('BOT_TOKEN').split(':')[0]}\n"
+        f"_ _ _ _ _ _ _ _ _ _\n"
+        f"*Юрич делает*"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+async def help_cmd(message: Message):
+    text = (
+        "📚 *Доступные команды:*\n\n"
+        "/start – регистрация и получение данных прокси\n"
+        "/stats – общая статистика\n"
+        "/myproxy – ваши данные прокси\n"
+        "/help – это сообщение\n\n"
+        "🔘 *Используйте кнопки под сообщениями для навигации.*\n\n"
+        "_ _ _ _ _ _ _ _ _ _\n"
+        "*Юрич делает*"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+async def settings_cmd(message: Message):
+    user_id = message.from_user.id
     conn = get_db()
     admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
     conn.close()
-    return admin and admin['is_admin'] == 1
-
-@dp.message(Command("adduser"))
-async def adduser_cmd(message: Message, command: CommandObject):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
+    if not admin or admin['is_admin'] != 1:
         await message.answer("⛔ У вас нет прав администратора.")
         return
-    args = command.args
-    if not args:
-        await message.answer("Укажите username нового пользователя. Пример: /adduser @username")
-        return
-    username = args.strip().lstrip('@')
-    try:
-        user = await bot.get_chat(f"@{username}")
-    except:
-        await message.answer("Пользователь не найден. Убедитесь, что username правильный.")
-        return
-    tg_id = user.id
-    conn = get_db()
-    existing = conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)).fetchone()
-    if existing:
-        await message.answer("Пользователь уже зарегистрирован.")
-        return
-    socks_user = f"user_{tg_id}"
-    socks_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
-    subprocess.run(['useradd', '-g', 'proxyusers', '-s', '/bin/false', socks_user], check=False)
-    subprocess.run(['echo', f'{socks_user}:{socks_pass}', '|', 'chpasswd'], shell=True, check=False)
-    conn.execute(
-        "INSERT INTO users (tg_id, username, socks_user, socks_pass, is_admin) VALUES (?, ?, ?, ?, 0)",
-        (tg_id, username, socks_user, socks_pass)
-    )
-    conn.commit()
-    conn.close()
-    await message.answer(f"✅ Пользователь @{username} добавлен. Он сможет получить свои данные через /start.")
 
-@dp.message(Command("deluser"))
-async def deluser_cmd(message: Message, command: CommandObject):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        await message.answer("⛔ У вас нет прав администратора.")
-        return
-    args = command.args
-    if not args:
-        await message.answer("Укажите username пользователя для удаления. Пример: /deluser @username")
-        return
-    username = args.strip().lstrip('@')
     conn = get_db()
-    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    if not user:
-        await message.answer("Пользователь не найден.")
-        return
-    subprocess.run(['userdel', user['socks_user']], check=False)
-    conn.execute("DELETE FROM users WHERE id = ?", (user['id'],))
-    conn.commit()
+    settings = conn.execute("SELECT key, value FROM settings").fetchall()
     conn.close()
-    await message.answer(f"✅ Пользователь @{username} удален.")
+    text = "⚙️ Текущие настройки:\n\n"
+    for s in settings:
+        text += f"**{s['key']}**: `{s['value']}`\n"
+    text += "\n_ _ _ _ _ _ _ _ _ _\n*Юрич делает*"
+    await message.answer(text, parse_mode="Markdown")
 
-@dp.message(Command("listusers"))
 async def listusers_cmd(message: Message):
     user_id = message.from_user.id
-    if not is_admin(user_id):
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not admin or admin['is_admin'] != 1:
         await message.answer("⛔ У вас нет прав администратора.")
         return
-    conn = get_db()
+
     users = conn.execute("SELECT tg_id, username, created_at FROM users").fetchall()
     conn.close()
     if not users:
@@ -477,127 +646,22 @@ async def listusers_cmd(message: Message):
     text = "📋 Список пользователей:\n\n"
     for u in users:
         text += f"👤 @{u['username']} (ID: {u['tg_id']}) - зарегистрирован {u['created_at']}\n"
-    await message.answer(text)
-
-@dp.message(Command("settings"))
-async def settings_cmd(message: Message):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        await message.answer("⛔ У вас нет прав администратора.")
-        return
-    conn = get_db()
-    settings = conn.execute("SELECT key, value FROM settings").fetchall()
-    conn.close()
-    text = "⚙️ Текущие настройки:\n\n"
-    for s in settings:
-        text += f"**{s['key']}**: `{s['value']}`\n"
+    text += "\n_ _ _ _ _ _ _ _ _ _\n*Юрич делает*"
     await message.answer(text, parse_mode="Markdown")
 
-@dp.message(Command("setsocksport"))
-async def set_socks_port(message: Message, command: CommandObject):
+async def online_stats_cmd(message: Message):
     user_id = message.from_user.id
-    if not is_admin(user_id):
+    conn = get_db()
+    admin = conn.execute("SELECT is_admin FROM users WHERE tg_id = ?", (user_id,)).fetchone()
+    if not admin or admin['is_admin'] != 1:
         await message.answer("⛔ У вас нет прав администратора.")
         return
-    args = command.args
-    if not args or not args.isdigit():
-        await message.answer("Укажите новый порт. Пример: /setsocksport 1080")
-        return
-    new_port = int(args)
-    subprocess.run(f"sed -i 's/port = [0-9]\\+/port = {new_port}/' /etc/danted.conf", shell=True)
-    subprocess.run("systemctl restart danted", shell=True)
-    subprocess.run(f"ufw allow {new_port}/tcp", shell=True)
-    conn = get_db()
-    conn.execute("UPDATE settings SET value = ? WHERE key = 'socks_port'", (new_port,))
-    conn.commit()
-    conn.close()
-    await message.answer(f"✅ Порт SOCKS5 изменен на {new_port}.")
 
-@dp.message(Command("setmtport"))
-async def set_mt_port(message: Message, command: CommandObject):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        await message.answer("⛔ У вас нет прав администратора.")
-        return
-    args = command.args
-    if not args or not args.isdigit():
-        await message.answer("Укажите новый порт. Пример: /setmtport 443")
-        return
-    new_port = int(args)
-    os.chdir('/opt/mtproto-proxy')
-    subprocess.run(f"sed -i 's/\"[0-9]\\+:443\"/\"{new_port}:443\"/' docker-compose.yml", shell=True)
-    subprocess.run("docker-compose down && docker-compose up -d", shell=True)
-    subprocess.run(f"ufw allow {new_port}/tcp", shell=True)
-    conn = get_db()
-    conn.execute("UPDATE settings SET value = ? WHERE key = 'mtproto_port'", (new_port,))
-    conn.commit()
+    socks_port = conn.execute("SELECT value FROM settings WHERE key='socks_port'").fetchone()['value']
     conn.close()
-    await message.answer(f"✅ Порт MTProto изменен на {new_port}.")
-
-@dp.message(Command("setmtsecret"))
-async def set_mt_secret(message: Message, command: CommandObject):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        await message.answer("⛔ У вас нет прав администратора.")
-        return
-    args = command.args
-    if not args or len(args) != 32 or not all(c in '0123456789abcdef' for c in args):
-        await message.answer("Укажите новый секрет (32 hex символа). Пример: /setmtsecret 0123456789abcdef0123456789abcdef")
-        return
-    new_secret = args
-    os.chdir('/opt/mtproto-proxy')
-    subprocess.run(f"sed -i 's/SECRET=.*/SECRET={new_secret}/' docker-compose.yml", shell=True)
-    subprocess.run("docker-compose down && docker-compose up -d", shell=True)
-    conn = get_db()
-    conn.execute("UPDATE settings SET value = ? WHERE key = 'mtproto_secret'", (new_secret,))
-    conn.commit()
-    conn.close()
-    await message.answer(f"✅ Секрет MTProto изменен.")
-
-@dp.message(Command("addadmin"))
-async def addadmin_cmd(message: Message, command: CommandObject):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        await message.answer("⛔ У вас нет прав администратора.")
-        return
-    args = command.args
-    if not args:
-        await message.answer("Укажите username нового администратора. Пример: /addadmin @username")
-        return
-    username = args.strip().lstrip('@')
-    conn = get_db()
-    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    if not user:
-        await message.answer("Пользователь не найден. Сначала зарегистрируйте его через /start или /adduser.")
-        return
-    conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
-    conn.commit()
-    conn.close()
-    await message.answer(f"✅ Пользователь @{username} теперь администратор.")
-
-@dp.message(Command("help"))
-async def help_cmd(message: Message):
-    user_id = message.from_user.id
-    admin = is_admin(user_id)
-    text = (
-        "📚 Доступные команды:\n\n"
-        "/start – регистрация и получение данных прокси\n"
-        "/stats – общая статистика\n"
-        "/myproxy – ваши данные прокси\n"
-        "/help – это сообщение\n"
-    )
-    if admin:
-        text += (
-            "\n👑 Админ-команды:\n"
-            "/adduser @username – добавить пользователя\n"
-            "/deluser @username – удалить пользователя\n"
-            "/listusers – список пользователей\n"
-            "/setsocksport <порт> – изменить порт SOCKS5\n"
-            "/setmtport <порт> – изменить порт MTProto\n"
-            "/setmtsecret <32hex> – изменить секрет MTProto\n"
-            "/addadmin @username – дать права админа\n"
-        )
-    await message.answer(text)
+    active_conn = subprocess.getoutput(f"netstat -an | grep :{socks_port} | grep ESTABLISHED | wc -l")
+    text = f"📈 *Онлайн статистика*\n\nАктивных подключений к SOCKS5: {active_conn}\n\n_ _ _ _ _ _ _ _ _ _\n*Юрич делает*"
+    await message.answer(text, parse_mode="Markdown")
 
 async def main():
     await dp.start_polling(bot)
@@ -630,11 +694,55 @@ systemctl daemon-reload
 systemctl enable proxy-bot
 systemctl start proxy-bot
 
+# Установка администратора
 if [[ -n "$ADMIN_ID" ]]; then
     sqlite3 /opt/proxy-bot/database.db "INSERT OR IGNORE INTO users (tg_id, username, is_admin) VALUES ($ADMIN_ID, 'admin', 1);"
     info "Администратор с ID $ADMIN_ID установлен."
 fi
 
+# Создание консольной команды для управления
+cat > /usr/local/bin/yurich-proxy <<'EOF'
+#!/bin/bash
+case "$1" in
+    status)
+        echo -e "\033[0;36mПрокси-менеджер\033[0m"
+        systemctl status proxy-bot --no-pager | grep -E "Active:|loaded" || echo "Бот не запущен"
+        systemctl status danted --no-pager | grep -E "Active:|loaded" || echo "SOCKS5 не запущен"
+        docker ps --filter "name=mtproto-proxy" --format "table {{.Names}}\t{{.Status}}" || echo "MTProto не запущен"
+        ;;
+    restart)
+        systemctl restart proxy-bot
+        systemctl restart danted
+        cd /opt/mtproto-proxy && docker-compose restart
+        echo "✅ Все сервисы перезапущены"
+        ;;
+    logs)
+        journalctl -u proxy-bot -n 50 --no-pager
+        ;;
+    update)
+        curl -sSL https://raw.githubusercontent.com/Pykucyka/yurichdelaetproxy/main/yurich_proxy.sh -o /tmp/update.sh
+        bash /tmp/update.sh --skip-questions
+        rm /tmp/update.sh
+        ;;
+    help|--help|-h)
+        echo "Использование: yurich-proxy {status|restart|logs|update|help}"
+        echo "  status   - показать статус всех сервисов"
+        echo "  restart  - перезапустить все сервисы"
+        echo "  logs     - показать последние логи бота"
+        echo "  update   - обновить скрипт (сохраняет настройки)"
+        echo "  help     - эта справка"
+        ;;
+    *)
+        echo "Неизвестная команда: $1"
+        echo "Используйте: yurich-proxy help"
+        exit 1
+        ;;
+esac
+EOF
+
+chmod +x /usr/local/bin/yurich-proxy
+
+# Итоговая информация
 PUBLIC_IP=$(curl -s ifconfig.me)
 MTLINK="tg://proxy?server=$PUBLIC_IP&port=$MTPROTO_PORT&secret=$MTPROTO_SECRET"
 MTLINK_DOMAIN=""
@@ -644,7 +752,7 @@ fi
 
 echo ""
 echo "========================================="
-echo -e "${GREEN}✅ Установка завершена!${NC}"
+printf "${GREEN}✅ Установка завершена!${NC}\n"
 echo "========================================="
 echo ""
 echo "🌐 SOCKS5 прокси: $PUBLIC_IP:$SOCKS_PORT"
@@ -653,12 +761,16 @@ echo "🔗 Ссылка MTProto: $MTLINK"
 [[ -n "$MTLINK_DOMAIN" ]] && echo "🔗 Ссылка с доменом: $MTLINK_DOMAIN"
 echo ""
 echo "🤖 Telegram бот: @${BOT_TOKEN%%:*}"
-echo "📋 Команды бота: /start, /stats, /myproxy, /help"
-echo "👑 Администратор: ${ADMIN_ID:-не задан}"
+echo "📋 Бот использует кнопки:"
+echo "   • Главное меню: Мои данные, Статистика, Поделиться, Помощь"
+echo "   • Для администраторов: Админка → управление пользователями, настройки, онлайн-статистика"
+echo "👑 Администратор: ${ADMIN_ID:-не задан (назначьте через /addadmin)}"
 echo ""
 echo "📄 Информация сохранена в /root/proxy_info.txt"
+echo "🛠 Команды управления: yurich-proxy {status|restart|logs|update|help}"
 echo "========================================="
 
+# Сохраняем информацию
 cat > /root/proxy_info.txt <<EOF
 Прокси-сервер (Docker)
 
