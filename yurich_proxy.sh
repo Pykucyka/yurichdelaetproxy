@@ -1,7 +1,7 @@
 #!/bin/bash
 # Прокси-менеджер для Telegram и WhatsApp с Telegram-ботом
 # Автор: Юрич
-# Версия: 3.5
+# Версия: 3.6 (исправлена обработка IPv4, heredoc, ошибки)
 
 set -e
 
@@ -16,11 +16,21 @@ info() { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
 error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
 
+# Получение публичного IPv4 (игнорируем IPv6)
+get_public_ipv4() {
+    IP=$(curl -4 -s ifconfig.me || curl -4 -s icanhazip.com || curl -4 -s ipinfo.io/ip)
+    if [[ -z "$IP" ]]; then
+        warn "Не удалось получить IPv4 автоматически. Будет использован IPv6, но он может не работать с MTProto."
+        IP=$(curl -s ifconfig.me)
+    fi
+    echo "$IP"
+}
+
 check_internet() {
-    if curl -s --connect-timeout 5 https://ifconfig.me > /dev/null; then
-        info "Интернет доступен"
+    if curl -4 -s --connect-timeout 5 https://ifconfig.me > /dev/null; then
+        info "Интернет доступен (IPv4)"
     else
-        warn "Не удаётся проверить интернет-соединение, продолжаем установку..."
+        warn "Не удаётся проверить интернет-соединение по IPv4, продолжаем установку..."
     fi
 }
 
@@ -37,7 +47,7 @@ print_banner() {
     printf "${YELLOW}║     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${CYAN}                     ║\n"
     printf '║                                                                          ║\n'
     printf "${GREEN}║              ★  Юрич делает  ★  SOCKS5 + MTProto  ★${CYAN}               ║\n"
-    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.5${CYAN}                       ║\n"
+    printf "${YELLOW}║              Для Telegram и WhatsApp  |  v3.6${CYAN}                       ║\n"
     printf '║                                                                          ║\n'
     printf '╚══════════════════════════════════════════════════════════════════════════╝\n'
     printf "${NC}\n\n"
@@ -81,7 +91,6 @@ fi
 if ! command -v docker &> /dev/null; then
     info "Установка Docker..."
     curl -fsSL https://get.docker.com -o get-docker.sh
-    # Удаляем строку с docker-model-plugin из скрипта, если она там есть
     sed -i 's/docker-model-plugin//g' get-docker.sh
     sh get-docker.sh
     rm get-docker.sh
@@ -108,10 +117,12 @@ read -p "Username бота (например, MyProxyBot, необязатель
 read -p "ID канала (например, @channel или -100123456): " CHANNEL_ID
 [[ -z "$CHANNEL_ID" ]] && error "ID канала обязателен."
 
-read -p "Ваш домен (если нет, оставьте пустым, будет IP): " DOMAIN
+# Получаем IPv4 адрес
+PUBLIC_IPV4=$(get_public_ipv4)
+read -p "Ваш домен или IPv4 адрес (оставьте пустым для использования автоматического IP: $PUBLIC_IPV4): " DOMAIN
 if [[ -z "$DOMAIN" ]]; then
-    DOMAIN=$(curl -s ifconfig.me)
-    info "Домен не указан, используем IP: $DOMAIN"
+    DOMAIN="$PUBLIC_IPV4"
+    info "Используем IPv4 адрес: $DOMAIN"
 fi
 
 read -p "Порт SOCKS5 [1080]: " SOCKS_PORT
@@ -134,7 +145,7 @@ echo "-----------------------------"
 echo "Токен бота: $BOT_TOKEN"
 [[ -n "$BOT_USERNAME" ]] && echo "Username бота: @$BOT_USERNAME"
 echo "Канал: $CHANNEL_ID"
-echo "Домен: $DOMAIN"
+echo "Домен/IP: $DOMAIN"
 echo "Интерфейс: $default_iface"
 echo "SOCKS5 порт: $SOCKS_PORT"
 echo "MTProto порт: $MTPROTO_PORT"
@@ -247,8 +258,8 @@ EOF
 
 python3 init_db.py
 
-# Основной скрипт бота (полная версия с кнопками и админкой)
-cat > bot.py <<'PYEOF'
+# Основной скрипт бота (полная версия с кнопками и админкой) — теперь без ошибок heredoc
+cat > bot.py <<'EOF'
 import asyncio
 import logging
 import sqlite3
@@ -349,7 +360,9 @@ async def start_cmd(message: Message, state: FSMContext):
     settings_dict = {row['key']: row['value'] for row in settings}
     conn.close()
 
-    public_ip = subprocess.getoutput("curl -s ifconfig.me")
+    public_ip = subprocess.getoutput("curl -4 -s ifconfig.me")
+    if not public_ip:
+        public_ip = subprocess.getoutput("curl -s ifconfig.me")
     mtproto_link = f"tg://proxy?server={public_ip}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
     if settings_dict['mtproto_domain'] != public_ip:
         mtproto_link_domain = f"tg://proxy?server={settings_dict['mtproto_domain']}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
@@ -533,7 +546,9 @@ async def myproxy_cmd(message: Message):
     settings_dict = {row['key']: row['value'] for row in settings}
     conn.close()
 
-    public_ip = subprocess.getoutput("curl -s ifconfig.me")
+    public_ip = subprocess.getoutput("curl -4 -s ifconfig.me")
+    if not public_ip:
+        public_ip = subprocess.getoutput("curl -s ifconfig.me")
     mtproto_link = f"tg://proxy?server={public_ip}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
     text = (
         f"🌐 Ваши данные для прокси:\n\n"
@@ -584,7 +599,9 @@ async def share_cmd(message: Message):
     settings_dict = {row['key']: row['value'] for row in settings}
     conn.close()
 
-    public_ip = subprocess.getoutput("curl -s ifconfig.me")
+    public_ip = subprocess.getoutput("curl -4 -s ifconfig.me")
+    if not public_ip:
+        public_ip = subprocess.getoutput("curl -s ifconfig.me")
     mtproto_link = f"tg://proxy?server={public_ip}&port={settings_dict['mtproto_port']}&secret={settings_dict['mtproto_secret']}"
     text = (
         f"🚀 *Мой прокси для Telegram и WhatsApp*\n\n"
@@ -667,7 +684,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-PYEOF
+EOF
 
 # Создание systemd сервиса
 cat > /etc/systemd/system/proxy-bot.service <<EOF
@@ -742,7 +759,7 @@ EOF
 chmod +x /usr/local/bin/yurich-proxy
 
 # Итоговая информация
-PUBLIC_IP=$(curl -s ifconfig.me)
+PUBLIC_IP=$(get_public_ipv4)
 MTLINK="tg://proxy?server=$PUBLIC_IP&port=$MTPROTO_PORT&secret=$MTPROTO_SECRET"
 MTLINK_DOMAIN=""
 if [[ "$DOMAIN" != "$PUBLIC_IP" ]]; then
